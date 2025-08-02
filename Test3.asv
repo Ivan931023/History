@@ -1,0 +1,66 @@
+clc
+clear all
+close all
+
+% imaqreset   %%% Reset CCD
+% imaqhwinfo  %%% 查看有哪些硬體介面支援套件
+% imaqhwinfo('pointgrey') %%% 查詢 PointGrey 相機資訊與模式
+% imaqhwinfo('gige') %%% 查詢 GigE Vision 相機資訊
+
+tic
+
+% Part.1 Input parameters
+% ------------------------------------------------------------------------ %
+% ---------- Beam parameter ---------- %
+
+lambda = 447e-6;
+f = 300;
+Beam_size = 3.45;    % 強度衰減至 1/e^2 之光束直徑 
+
+% ---------- Phase pattern parameter ---------- %
+pixel = 1080;
+pixel_Zernike = 750;
+move_x = -90;
+move_y = 130;
+
+% ---------- Grating parameter ---------- %
+theta_deg = -90;     % Grating rotate angle(Deg)
+theta_blazed = deg2rad(theta_deg); % deg to rad
+% max_phase = 200;     % Maximum brazed grating phase
+min_phase = 0;       % Minimum brazed grating phase
+repeat = 1;          % The number of times the phase is repeated
+level = 12; 
+
+% Part.2 Setup 
+% ------------------------------------------------------------------------ %
+% ---------- Setup CCD and shapshot ---------- %
+
+% ---------- CCD parameter ---------- %
+CCD_mode = 'F7_Mono16_2592x1944_Mode0';
+intensity_range_1 = [0 63258]; % for 1 order
+intensity_range_2 = [0 21000]; % for 2 order
+%Shutter = 0.2; %order1
+Shutter = 2; %order2
+Exposure = 0;
+Sharpness = 0;
+Brightness = 0;
+Gain = 0;
+snapshot_times = 5;
+Check_Shutter = 1;
+CCD_pixel = 2.2e-3; % CCD pixel size (CCD : BFLY-PGE-50A2C-CS)
+
+vid = videoinput('pointgrey', 1, CCD_mode);
+
+% 可調參數控制中心
+intensity_range = intensity_range_2;
+order = 1;
+num = 9;
+
+% ROI pixel positions
+row_idx = 700;
+col_list = [1700, 1900, 2100];   % Three pixel columns
+amplitude_range = 0:2:248;
+num_points = length(amplitude_range);
+num_positions = length(col_list);
+intensity_matrix = zeros(num_points, num_positions);
+

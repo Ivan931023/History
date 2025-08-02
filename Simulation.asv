@@ -1,0 +1,178 @@
+clc;
+clear all;
+close all;
+
+tic
+% --------- 自動建立儲存資料夾 (Run_001, Run_002, ...) --------- %
+base_path = fileparts(mfilename('fullpath'));
+i = 1;
+while true
+    save_path = fullfile(base_path, sprintf('Run_%03d', i));
+    if ~exist(save_path, 'dir')
+        mkdir(save_path);
+        break;
+    else
+        i = i + 1;
+    end
+end
+fprintf('資料將儲存於：%s\n', save_path);
+copyfile([mfilename '.m'], fullfile(save_path, [mfilename '_backup.m']));  % 備份目前程式碼
+
+% ---------- Beam parameter ---------- %
+f = 300;                 % Focal length (mm)
+lambda = 447e-6;         % Wave length (mm)
+CCD_pixel_size = 2.2e-3; % (mm)
+dx = 8e-3;               % (mm)
+pixel = round(lambda*f / (dx*CCD_pixel_size),-1);
+pixel_grating = 1000;
+Beam_size = 1;
+range = 1000;
+
+% --------- SLM plane ---------
+Nx = pixel_grating;
+Ny = pixel_grating;
+dy = dx;
+x = -Nx/2*dx : dx : (Nx/2-1)*dx;
+y = -Ny/2*dy : dy : (Ny/2-1)*dy;
+[X, Y] = meshgrid(x, -y);  % Flip y for display alignment
+
+a = 0.1;
+Quadratic_phase = a*X.^2 + a*Y.^2;
+
+% ---------- Optical parameters ---------- %
+r = 0.055;
+t = 1 - r;
+w = 1 * 8e-3;
+
+count = 1;
+Max_phase = 1:2:10;
+zero_array = zeros(size(Max_phase));
+first_array = zeros(size(Max_phase));
+second_array = zeros(size(Max_phase));
+
+for max_phase = Max_phase
+    fprintf('Processing max_phase = %d ...\n', max_phase);
+    progress = count / length(Max_phase) * 100;
+    fprintf('Progress: %3.0f%%\n', progress);
+    % ---------- Grating parameters ---------- %
+    theta_deg = 0;
+    theta_blazed = deg2rad(theta_deg);
+    min_phase = 0;
+    repeat = 1;
+    level = 12;
+
+    Blazed_theta = Grating_phase(pixel_grating, max_phase, min_phase, level, repeat, theta_blazed);
+    Gaussian_PSF = exp(-(X.^2 + Y.^2) / (2 * w^2));
+    Gaussian_PSF = Gaussian_PSF / sum(Gaussian_PSF, 'all');
+
+    Input_beam = Gaussian_beam(Beam_size, pixel, dx);
+
+    phi = conv2(Blazed_theta, Gaussian_PSF, 'same');
+    phi = padding(phi, pixel);
+
+    E = -(r + exp(1j * phi)) ./ (1 + r * exp(1j * phi));
+
+    u1 = propTF(Input_beam .* E, pixel * dx, lambda, 250);
+    u2 = DFT(u1);
+    u3 = propTF(u2, pixel * dx, lambda, 250);
+
+    image = abs(u3).^2;
+
+    c = round(pixel / 2);
+    data_zoomin = image(c-range:c+range, c-range:c+range);
+
+    zero_array(count)   = data_zoomin(range+1, 1001);
+    first_array(count)  = data_zoomin(range+1, 1363);
+    second_array(count) = data_zoomin(range+1, 1725);
+
+    f1 = figure;
+    imagesc(data_zoomin, [0 max(data_zoomin(:))]);
+    colormap turbo;
+    colorbar;
+    axis image;
+    title(sprintf('maximum phase = %d', max_phase));
+
+    f2 = figure;
+    plot(1:length(data_zoomin), data_zoomin(range+1,:));
+    xlim([0 2*range+1]);
+    title(sprintf('maximum phase = %d', max_phase));
+
+    time = 0.1;
+    Generate_GIF(f1, fullfile(save_path, 'Zoom_in.gif'), time, count);
+    Generate_GIF(f2, fullfile(save_path, 'Transverse.gif'), time, count);
+
+    count = count + 1;
+    close all;
+end
+
+% ---------- Plot result summary ---------- %
+f3 = figure;
+scatter(Max_phase, zero_array, 10, 'filled');
+hold on
+scatter(Max_phase, first_array, 10, 'filled');
+scatter(Max_phase, second_array, 10, 'filled');
+xlim([0 255]);
+xlabel('Maximum phase');
+ylabel('Intensity');
+legend('Zero order', 'First order', 'Second order');
+
+f4 = figure;
+scatter(Max_phase, first_array, 10, 'filled');
+xlim([0 255]);
+xlabel('Maximum phase');
+ylabel('Intensity');
+title('First order');
+
+f5 = figure;
+scatter(Max_phase, second_array, 10, 'filled');
+xlim([0 255]);
+xlabel('Maximum phase');
+ylabel('Intensity');
+title('Second order');
+
+T = table(Max_phase', zero_array', first_array', second_array', ...
+    'VariableNames', {'MaxPhase', 'ZeroOrder', 'FirstOrder', 'SecondOrder'});
+exportgraphics(f3, fullfile(save_path, 'Intensity.png'));
+exportgraphics(f4, fullfile(save_path, 'First_order.png'));
+exportgraphics(f5, fullfile(save_path, 'Second_order.png'));
+writematrix(T, fullfile(save_path, 'Data.csv'));
+
+% ---------- 自動儲存參數設定 ---------- %
+param_file = fullfile(save_path, 'parameters.txt');
+fid = fopen(param_file, 'w');
+fprintf(fid, '--- Simulation Parameters ---\n');
+fprintf(fid, 'Focal length f             = %.2f mm\n', f);
+fprintf(fid, 'Wavelength lambda         = %.6f mm\n', lambda);
+fprintf(fid, 'CCD pixel size            = %.4f mm\n', CCD_pixel_size);
+fprintf(fid, 'SLM pixel pitch (dx)      = %.4f mm\n', dx);
+fprintf(fid, 'Fourier pixel count       = %d\n', pixel);
+fprintf(fid, 'Grating pixel count       = %d\n', pixel_grating);
+fprintf(fid, 'Beam waist (Beam_size)    = %.2f (normalized)\n', Beam_size);
+fprintf(fid, 'Propagation range         = %d pixels\n', range);
+fprintf(fid, 'Reflection coefficient r  = %.3f\n', r);
+fprintf(fid, 'PSF width (w)             = %.5f mm\n', w);
+fprintf(fid, 'Grating angle (deg)       = %.2f\n', theta_deg);
+fprintf(fid, 'Grating level             = %d\n', level);
+fprintf(fid, 'Max_phase range           = [%d:%d:%d]\n', MinPhase(1), diff(Max_phase(1:2)), Max_phase(end));
+fclose(fid);
+
+save(fullfile(save_path, 'params.mat'), ...
+    'f', 'lambda', 'CCD_pixel_size', 'dx', 'pixel', ...
+    'pixel_grating', 'Beam_size', 'range', 'r', 't', 'w', ...
+    'theta_deg', 'theta_blazed', 'repeat', 'level', 'Max_phase');
+
+
+% ---------- Function: Generate GIF ---------- %
+function Generate_GIF(fig_handle, gif_filename, delay_time, frame_index)
+    frame = getframe(fig_handle);
+    im = frame2im(frame);
+    [imind, cm] = rgb2ind(im, 256);
+    if frame_index == 1
+        imwrite(imind, cm, gif_filename, 'gif', 'Loopcount', Inf, 'DelayTime', delay_time);
+    else
+        imwrite(imind, cm, gif_filename, 'gif', 'WriteMode', 'append', 'DelayTime', delay_time);
+    end
+end
+fprintf('模擬完成，結果已儲存於 %s\n', save_path);
+
+toc
