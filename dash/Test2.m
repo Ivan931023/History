@@ -1,0 +1,256 @@
+clc
+clear 
+close all
+
+% imaqreset   %%% Reset CCD
+% imaqhwinfo  %%% 查看有哪些硬體介面支援套件
+% imaqhwinfo('pointgrey') %%% 查詢 PointGrey 相機資訊與模式
+% imaqhwinfo('gige') %%% 查詢 GigE Vision 相機資訊
+
+
+
+tic
+
+% Part.1 Input parameters
+% ------------------------------------------------------------------------ %
+% ---------- Beam parameter ---------- %
+
+lambda = 447e-6;
+f = 300;
+Beam_size = 3.45;    % 強度衰減至 1/e^2 之光束直徑 
+
+% ---------- Phase pattern parameter ---------- %
+pixel = 1080;
+move_x = -90;
+move_y = 130;
+
+
+% ---------- Grating parameter ---------- %
+theta_deg = -90;     % Grating rotate angle(Deg)
+theta_blazed = deg2rad(theta_deg); % deg to rad
+% max_phase = 200;     % Maximum brazed grating phase
+min_phase = 0;       % Minimum brazed grating phase
+repeat = 1;          % The number of times the phase is repeated
+level = 12; 
+
+
+% Part.2 Setup 
+% ------------------------------------------------------------------------ %
+% ---------- Setup CCD and shapshot ---------- %
+
+% ---------- CCD parameter ---------- %
+CCD_mode = 'F7_Mono16_2592x1944_Mode0';
+intensity_range = [0 20000];
+Shutter = 0.2; %order1
+% Shutter = 2; %order2
+Exposure = 0;
+Sharpness = 0;
+Brightness = 0;
+Gain = 0;
+snapshot_times = 5;
+Check_Shutter = 1;
+CCD_pixel = 2.2e-3; % CCD pixel size (CCD : BFLY-PGE-50A2C-CS)
+
+vid = videoinput('pointgrey', 1, CCD_mode);
+
+% 可調參數控制中心
+order = 1;
+num = 6;
+
+% ROI pixel positions
+% center_x = 1035; %order1
+% center_y = 1385;
+center_x = 1430; %order2
+center_y = 1400;
+col_list_test = [center_y, center_y+200, center_y+400];   % Three pixel columns
+col_list_all = [center_y-600, center_y-500, center_y-400,...
+    center_y-300, center_y-200, center_y-100, center_y, center_y+100,...
+    center_y+200, center_y+300, center_y+400, center_y+500, center_y+600];
+amplitude_range = 0:2:248;
+num_points = length(amplitude_range);
+num_positions_test = length(col_list_test);
+num_positions_all = length(col_list_all);
+intensity_matrix_test = zeros(num_points, num_positions_test);
+intensity_matrix_all = zeros(num_points, num_positions_all);
+
+
+
+
+
+
+
+% ------------------------------------------------------------------------ %
+
+for i = 1:num_points
+    max_phase = amplitude_range(i);
+
+    
+
+    % ---------- CCD setup ---------- %
+    % vid = videoinput('pointgrey', 1, CCD_mode);
+    src = getselectedsource(vid);
+    src.Shutter = Shutter;
+    src.Sharpness = Sharpness;
+    src.Brightness = Brightness;
+    src.Exposure = Exposure;
+    src.Gain = Gain;
+
+
+    % Generate phase pattern
+    Blazed_phi = Grating_phase(pixel, max_phase, min_phase, level, repeat, theta_blazed);
+    Total_phase = Blazed_phi;
+    phase = mod(Total_phase, 2*pi);
+
+    % Show phase pattern on SLM
+    close all
+    move_image_on_screen(move_x, move_y, pixel, phase);
+    pause(1)
+    
+
+    % Capture and average CCD image
+    img_accum = 0;
+    for s = 1:snapshot_times
+        start(vid);
+        data = getdata(vid, 1);
+        data = double(data);
+        stop(vid);
+        img_accum = img_accum + data;
+        pause(0.08)
+    end
+    img_avg = img_accum / snapshot_times;
+
+    % 對三個位置做 12x12 區域平均
+    window_size = 12;
+    half_win = floor(window_size / 2);
+
+    for k = 1:num_positions_all
+        col = col_list_all(k);
+   
+        % 計算區域範圍
+        row_range = max(1, min((center_x - half_win + 1):(center_x + half_win), size(img_avg,1)));
+        col_range = max(1, min((col - half_win + 1):(col + half_win), size(img_avg,2)));
+
+        % 擷取子圖並平均
+        roi_img = img_avg(row_range, col_range);
+        intensity_matrix_all(i, k) = mean(roi_img(:));
+
+    end
+
+    intensity_matrix_test(i,1) = intensity_matrix_all(i, 7);
+    intensity_matrix_test(i,2) = intensity_matrix_all(i, 9);
+    intensity_matrix_test(i,3) = intensity_matrix_all(i, 11);
+
+    % Record intensity for each ROI point
+
+    fprintf('max_phase = %3d | Intensity = [%.1f, %.1f, %.1f]\n', ...
+        max_phase,  intensity_matrix_test(i,1),  intensity_matrix_test(i,2), intensity_matrix_test(i,3));
+
+    % % Create GIF
+    % frame_img = mat2gray(img_avg);
+    % frame_img_uint8 = im2uint8(frame_img);
+    % [imind, cm] = gray2ind(frame_img_uint8, 256);
+    % gif_filename = 'ccd_grating_sweep_1.gif';
+    % 
+    % if i == 1
+    %     imwrite(imind, cm, gif_filename, 'gif', 'Loopcount', inf, 'DelayTime', 0.05);
+    % else
+    %     imwrite(imind, cm, gif_filename, 'gif', 'WriteMode', 'append', 'DelayTime', 0.05);
+    % end
+
+    % ---------- 彩色 GIF 儲存 ----------
+    % vmin = min(img_avg(:));  % 或儲存所有 frame 再統一選最小
+    % vmax = max(img_avg(:));  % 同上
+    fig = figure('Visible','off'); % 不顯示 figure，加快速度
+    imagesc(img_avg);
+    % axis off;
+    axis image;
+    colormap(turbo); % 使用 Turbo colormap
+    % clim(intensity_range);
+    clim(intensity_range);
+    colorbar;
+    title(sprintf('%d order diffraction with shutter = %d', order, Shutter));
+
+
+    % 抓取圖像框內容
+    frame = getframe(fig);
+    rgb_image = frame2im(frame);
+
+
+    % 儲存為 PNG
+    % Create folder for saving individual frames
+    output_folder = sprintf('ccd_frames_order%d_%d', order, num);
+    if ~exist(output_folder, 'dir')
+        mkdir(output_folder);
+    end
+
+    png_frame_name = fullfile(output_folder, sprintf('frame_%03d.png', i));
+    imwrite(rgb_image, png_frame_name);
+
+    % 建立 Hologram 資料夾（如果還沒建立）
+    output_folder = 'Hologram';
+    if ~exist(output_folder, 'dir')
+        mkdir(output_folder);
+    end
+
+    % 將 phase 轉為 8-bit 灰階圖（[0, 2π] → [0, 255]）
+    phase_uint8 = uint8(phase / (2*pi) * 255);
+
+    % 建立檔名與儲存路徑
+    filename = sprintf('holo_%03d.png', i);  % 如 holo_001.png
+    filepath = fullfile(output_folder, filename);
+
+    % 儲存為 PNG
+    imwrite(phase_uint8, filepath);
+
+
+
+    % gif
+    gif_filename = sprintf('ccd_grating_sweep_color_order%d_%d.gif', order, num);
+
+    [rgb_indexed, map] = rgb2ind(rgb_image, 256);
+
+    if i == 1
+        imwrite(rgb_indexed, map, gif_filename, 'gif', 'Loopcount', inf, 'DelayTime', 0.05);
+    else
+        imwrite(rgb_indexed, map, gif_filename, 'gif', 'WriteMode', 'append', 'DelayTime', 0.05);
+    end
+
+    close(fig); % 關掉 figure 以節省資源
+end
+
+% Cleanup
+delete(vid);
+
+% Plot intensity vs phase (dot plot)
+figure;
+hold on;
+marker_set_test = {'rx', 'g+', 'b*'};  % Red circle, green square, blue triangle
+label_set_test = arrayfun(@(c) sprintf('(%d,%d)', center_x, c), col_list_test, 'UniformOutput', false);
+label_set_all = arrayfun(@(c) sprintf('(%d,%d)', center_x, c), col_list_all, 'UniformOutput', false);
+
+for k = 1:num_positions_test
+    plot(amplitude_range, intensity_matrix_test(:,k), marker_set_test{k}, 'MarkerSize', 3, ...
+        'DisplayName', label_set_test{k});
+end
+xlabel('Grating max phase amplitude');
+ylabel('Intensity at tested sections');
+legend('show', 'Location', 'northwest');
+title('Intensity vs Grating Amplitude');
+grid on;
+png_name = sprintf('intensity_vs_grating_order%d_%d.png', order, num);
+saveas(gcf, png_name);     % png 檔
+
+% fig_name = sprintf('intensity_vs_grating_order%d_%d.fig', order, num);
+% saveas(gcf, fig_name);     % MATLAB figure 檔
+
+% Save to .csv
+output_table = table(amplitude_range',  intensity_matrix_all(:,1), intensity_matrix_all(:,2), intensity_matrix_all(:,3), ...
+    intensity_matrix_all(:,4), intensity_matrix_all(:,5), intensity_matrix_all(:,6), intensity_matrix_all(:,7), ...
+    intensity_matrix_all(:,8), intensity_matrix_all(:,9), intensity_matrix_all(:,10), intensity_matrix_all(:,11), ...
+    intensity_matrix_all(:,12), intensity_matrix_all(:,13), ...
+    'VariableNames', [{'GratingPhaseAmplitude'}, label_set_all]);
+
+csv_name =  sprintf('grating_intensity_data_order%d_%d.csv', order, num);
+writetable(output_table, csv_name);
+
+toc
